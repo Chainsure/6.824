@@ -1,29 +1,33 @@
 package mr
 
-//
-// RPC definitions.
-//
-// remember to capitalize all names.
-//
+import (
+	"os"
+	"strconv"
+)
 
-import "os"
-import "strconv"
-
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
+// rpc definitions
+type Int32Struct struct {
+	Int32Val int
 }
 
-type ExampleReply struct {
-	Y int
+type WorkerRepStruct struct {
+	Pid    int
+	WorkId int
 }
 
-// Add your RPC definitions here.
+type FileMapStatePair struct {
+	FileName string
+	State    int
+}
 
+type FileReduceStatePair struct {
+	ReduceIdx int
+	State     int
+}
+
+type FileName struct {
+	File string
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
