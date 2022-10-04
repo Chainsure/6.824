@@ -44,7 +44,7 @@ func ihash(key string) int {
 
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	log.SetOutput(ioutil.Discard)
+	// log.SetOutput(ioutil.Discard)
 	client := prepareClient()
 	mapperId := 1
 	pid := os.Getpid()
@@ -188,7 +188,6 @@ func mapTask(c *rpc.Client,
 	filename string,
 	mapf func(string, string) []KeyValue,
 	nReduce int) {
-	log.Printf("map task is executed by mapper id: %v pid: %v\n", mapperId, pid)
 	file, err := os.Open(filename)
 	if err != nil {
 		updateFileMapState(c, filename, Idle)
@@ -239,11 +238,11 @@ func mapTask(c *rpc.Client,
 
 // call coordiantor
 func getFileReducer(c *rpc.Client, reduceIdx int) WorkerRepStruct {
-	// reducerId := -1
 	reducerRep := WorkerRepStruct{}
 	ok := call(c, "Coordinator.GetFileReducer", reduceIdx, &reducerRep)
 	if !ok {
 		log.Printf("call getFileReducer failed!\n")
+		return WorkerRepStruct{}
 	}
 	return reducerRep
 }
@@ -267,72 +266,65 @@ func getReduceIdx(c *rpc.Client, reducerId int, pid int) int {
 		Pid:    pid,
 	}
 	ok := call(c, "Coordinator.GetReduceIdx", reducerRep, &reduceIdx)
-	if ok {
-		return reduceIdx
-	} else {
+	if !ok {
 		log.Printf("call getReduceIdx failed")
+		return -1
 	}
-	return -1
+	return reduceIdx
 }
 
 func reduceDone(c *rpc.Client) bool {
-	done := Int32Struct{}
+	done := false
 	ok := callWithoutArgs(c, "Coordinator.ReduceDone", &done)
-	if ok {
-		return done.Int32Val == 1
-	} else {
+	if !ok {
 		log.Printf("call reduceDone failed!")
+		return false
 	}
-	return false
+	return done
 }
 
 func getFileMapper(c *rpc.Client, filename string) WorkerRepStruct {
-	file := FileName{filename}
 	mapperRep := WorkerRepStruct{}
-	ok := call(c, "Coordinator.GetFileMapper", &file, &mapperRep)
-	if ok {
-		return mapperRep
-	} else {
+	ok := call(c, "Coordinator.GetFileMapper", filename, &mapperRep)
+	if !ok {
 		log.Printf("call getFileMapper failed!\n")
+		return WorkerRepStruct{}
 	}
-	return WorkerRepStruct{}
+	return mapperRep
 }
 
 func getReducerCnt(c *rpc.Client) int {
 	reducerCnt := 0
 	ok := callWithoutArgs(c, "Coordinator.GetReducerCnt", &reducerCnt)
-	if ok {
-		return reducerCnt
-	} else {
+	if !ok {
 		log.Printf("call getReducerCnt failed!\n")
+		return 0
 	}
-	return 0
+	return reducerCnt
 }
 
 func mapDone(c *rpc.Client) bool {
-	done := 0
+	done := false
 	ok := callWithoutArgs(c, "Coordinator.MapDone", &done)
-	if ok {
-		return done == 1
-	} else {
+	if !ok {
 		log.Printf("call mapNotDone failed!\n")
+		return false
 	}
-	return false
+	return done
 }
 
 func getMapFile(c *rpc.Client, mapperId int, pid int) string {
-	filename := FileName{}
+	filename := ""
 	mapperRep := WorkerRepStruct{
 		Pid:    pid,
 		WorkId: mapperId,
 	}
 	ok := call(c, "Coordinator.GetMapFile", &mapperRep, &filename)
-	if ok {
-		return filename.File
-	} else {
+	if !ok {
 		log.Printf("call getMapFile failed!\n")
+		return ""
 	}
-	return ""
+	return filename
 }
 
 func updateFileMapState(c *rpc.Client, filename string, state int) {
@@ -365,19 +357,16 @@ func dealErrAfterCall(err error) bool {
 }
 
 func callWithoutArgs(c *rpc.Client, rpcname string, reply interface{}) bool {
-	log.Printf("calling rpc method %v\n", rpcname)
 	err := c.Call(rpcname, false, reply)
 	return dealErrAfterCall(err)
 }
 
 func callWithoutReplies(c *rpc.Client, rpcname string, args interface{}) bool {
-	log.Printf("calling rpc method %v\n", rpcname)
 	err := c.Call(rpcname, args, nil)
 	return dealErrAfterCall(err)
 }
 
 func call(c *rpc.Client, rpcname string, args interface{}, reply interface{}) bool {
-	log.Printf("calling rpc method %v\n", rpcname)
 	err := c.Call(rpcname, args, reply)
 	return dealErrAfterCall(err)
 }

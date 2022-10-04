@@ -2,7 +2,6 @@ package mr
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -116,7 +115,6 @@ func (c *Coordinator) UpdateFileReduceState(filestate *FileReduceStatePair, repl
 		err := fmt.Errorf("%v does not exist in reduceStateMap", reduceIdx)
 		return err
 	} else {
-		log.Printf("Update reduce task %v reduce state to %v\n", reduceIdx, state)
 		if prevState != state {
 			c.reducerState[reduceIdx] = state
 		}
@@ -146,18 +144,17 @@ func (c *Coordinator) GetReduceIdx(reducerRep *WorkerRepStruct, reduceIdx *int) 
 	return nil
 }
 
-func (c *Coordinator) ReduceDone(args bool, reduceDone *Int32Struct) error {
-	done := 1
+func (c *Coordinator) ReduceDone(args bool, done *bool) error {
+	*done = true
 	c.reduceStateMu.Lock()
 	for _, reduceState := range c.reducerState {
 		if reduceState != Done {
-			done = 0
+			*done = false
 			break
 		}
 	}
 	c.reduceStateMu.Unlock()
-	reduceDone.Int32Val = done
-	if done == 1 {
+	if *done {
 		c.reduceDoneMu.Lock()
 		c.reducedone = true
 		c.reduceDoneMu.Unlock()
@@ -165,12 +162,12 @@ func (c *Coordinator) ReduceDone(args bool, reduceDone *Int32Struct) error {
 	return nil
 }
 
-func (c *Coordinator) GetFileMapper(filename *FileName, mapperRep *WorkerRepStruct) error {
+func (c *Coordinator) GetFileMapper(filename string, mapperRep *WorkerRepStruct) error {
 	c.mapperIdMu.Lock()
-	rep, ok := c.mapperId[filename.File]
+	rep, ok := c.mapperId[filename]
 	c.mapperIdMu.Unlock()
 	if !ok {
-		log.Printf("cannot find file %v in mapperId\n", filename.File)
+		log.Printf("cannot find file %v in mapperId\n", filename)
 	} else {
 		*mapperRep = rep
 	}
@@ -182,18 +179,18 @@ func (c *Coordinator) GetReducerCnt(arg bool, reducerCnt *int) error {
 	return nil
 }
 
-func (c *Coordinator) GetMapFile(mapperRep *WorkerRepStruct, filename *FileName) error {
+func (c *Coordinator) GetMapFile(mapperRep *WorkerRepStruct, filename *string) error {
 	c.mapperStateMu.Lock()
 	defer c.mapperStateMu.Unlock()
 	for file, state := range c.mapperState {
 		if state == Idle {
-			filename.File = file
+			*filename = file
 			c.mapperState[file] = Processing
 			c.mapperTimerMu.Lock()
-			c.mapperTimer[filename.File] = 10 * 1000 // 10 seconds or 10 * 1000 milliseconds
+			c.mapperTimer[*filename] = 10 * 1000 // 10 seconds or 10 * 1000 milliseconds
 			c.mapperTimerMu.Unlock()
 			c.mapperIdMu.Lock()
-			c.mapperId[filename.File] = *mapperRep
+			c.mapperId[*filename] = *mapperRep
 			c.mapperIdMu.Unlock()
 			break
 		}
@@ -201,17 +198,17 @@ func (c *Coordinator) GetMapFile(mapperRep *WorkerRepStruct, filename *FileName)
 	return nil
 }
 
-func (c *Coordinator) MapDone(args bool, done *int) error {
-	*done = 1
+func (c *Coordinator) MapDone(args bool, done *bool) error {
+	*done = true
 	c.mapperStateMu.Lock()
 	for _, state := range c.mapperState {
 		if state != Done {
-			*done = 0
+			*done = false
 			break
 		}
 	}
 	c.mapperStateMu.Unlock()
-	if *done == 1 {
+	if *done {
 		c.mapDoneMu.Lock()
 		c.mapdone = true
 		c.mapDoneMu.Unlock()
@@ -267,7 +264,6 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	log.SetOutput(ioutil.Discard)
 	c := Coordinator{
 		files:        files,
 		reducerCount: nReduce,
