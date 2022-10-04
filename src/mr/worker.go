@@ -44,7 +44,7 @@ func ihash(key string) int {
 
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	// log.SetOutput(ioutil.Discard)
+	log.SetOutput(ioutil.Discard)
 	client := prepareClient()
 	mapperId := 1
 	pid := os.Getpid()
@@ -60,7 +60,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		filename := getMapFile(client, mapperId, pid)
 		if filename == "" {
 			log.Println("All the map tasks are dealing ...")
-			time.Sleep(time.Millisecond * 200)
 		} else {
 			log.Printf("Mapping file %v with mapper %v of process %v\n", filename, mapperId, pid)
 			mapTask(client, pid, mapperId, filename, mapf, reducerCnt)
@@ -76,7 +75,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		reduceIdx := getReduceIdx(client, reducerId, pid)
 		if reduceIdx == -1 {
 			log.Printf("All the reduce tasks are dealing ...")
-			time.Sleep(time.Millisecond * 200)
 		} else {
 			log.Printf("Reduce task %v with reducer %v of process %v\n", reduceIdx, reducerId, pid)
 			reduceTask(client, pid, reducerId, reduceIdx, reducef, reducerCnt)
@@ -278,7 +276,7 @@ func reduceDone(c *rpc.Client) bool {
 	ok := callWithoutArgs(c, "Coordinator.ReduceDone", &done)
 	if !ok {
 		log.Printf("call reduceDone failed!")
-		return false
+		return true
 	}
 	return done
 }
@@ -307,8 +305,8 @@ func mapDone(c *rpc.Client) bool {
 	done := false
 	ok := callWithoutArgs(c, "Coordinator.MapDone", &done)
 	if !ok {
-		log.Printf("call mapNotDone failed!\n")
-		return false
+		log.Printf("call mapDone failed!\n")
+		return true
 	}
 	return done
 }

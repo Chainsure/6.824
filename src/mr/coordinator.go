@@ -30,6 +30,10 @@ type Coordinator struct {
 	reduceTimerMu sync.Mutex
 	reduceIdMu    sync.Mutex
 	reduceDoneMu  sync.Mutex
+	mapCondMu     sync.Mutex
+	reduceCondMu  sync.Mutex
+	mapCond       *sync.Cond
+	reduceCond    *sync.Cond
 	mapperState   map[string]int
 	mapperTimer   map[string]int
 	mapperId      map[string]WorkerRepStruct
@@ -54,6 +58,7 @@ func (c *Coordinator) checkMapTimer() {
 					c.mapperIdMu.Lock()
 					c.mapperId[file] = WorkerRepStruct{}
 					c.mapperIdMu.Unlock()
+					c.mapCond.Signal()
 				}
 				c.mapperTimerMu.Unlock()
 			} else if state == Idle {
@@ -79,6 +84,7 @@ func (c *Coordinator) checkMapTimer() {
 					c.reduceIdMu.Lock()
 					c.reducerId[id] = WorkerRepStruct{}
 					c.reduceIdMu.Unlock()
+					c.reduceCond.Signal()
 				}
 				c.reduceTimerMu.Unlock()
 			} else if state == Idle {
@@ -109,25 +115,27 @@ func (c *Coordinator) GetFileReducer(reduceIdx int, reducerRep *WorkerRepStruct)
 func (c *Coordinator) UpdateFileReduceState(filestate *FileReduceStatePair, reply *bool) error {
 	reduceIdx, state := filestate.ReduceIdx, filestate.State
 	c.reduceStateMu.Lock()
+	defer c.reduceStateMu.Unlock()
 	prevState, ok := c.reducerState[reduceIdx]
 	if !ok {
-		c.reduceStateMu.Unlock()
 		err := fmt.Errorf("%v does not exist in reduceStateMap", reduceIdx)
 		return err
-	} else {
-		if prevState != state {
-			c.reducerState[reduceIdx] = state
+	}
+	if prevState != state {
+		c.reducerState[reduceIdx] = state
+		if state == Idle {
+			c.reduceCond.Signal()
 		}
-		c.reduceStateMu.Unlock()
 	}
 	return nil
 }
 
 func (c *Coordinator) GetReduceIdx(reducerRep *WorkerRepStruct, reduceIdx *int) error {
 	*reduceIdx = -1
+	allDone := true
 	c.reduceStateMu.Lock()
-	defer c.reduceStateMu.Unlock()
 	for i := 1; i <= c.reducerCount; i++ {
+		allDone = allDone && (c.reducerState[i] == Done)
 		if c.reducerState[i] == Idle {
 			c.reduceTimerMu.Lock()
 			c.reducerTimer[i] = 10 * 1000
@@ -137,9 +145,14 @@ func (c *Coordinator) GetReduceIdx(reducerRep *WorkerRepStruct, reduceIdx *int) 
 			c.reduceIdMu.Unlock()
 			c.reducerState[i] = Processing
 			*reduceIdx = i
-			log.Printf("return reduce idx %v\n", i)
 			break
 		}
+	}
+	c.reduceStateMu.Unlock()
+	if *reduceIdx == -1 && !allDone {
+		c.reduceCond.L.Lock()
+		c.reduceCond.Wait()
+		c.reduceCond.L.Unlock()
 	}
 	return nil
 }
@@ -158,6 +171,7 @@ func (c *Coordinator) ReduceDone(args bool, done *bool) error {
 		c.reduceDoneMu.Lock()
 		c.reducedone = true
 		c.reduceDoneMu.Unlock()
+		c.reduceCond.Broadcast()
 	}
 	return nil
 }
@@ -181,8 +195,9 @@ func (c *Coordinator) GetReducerCnt(arg bool, reducerCnt *int) error {
 
 func (c *Coordinator) GetMapFile(mapperRep *WorkerRepStruct, filename *string) error {
 	c.mapperStateMu.Lock()
-	defer c.mapperStateMu.Unlock()
+	allDone := true
 	for file, state := range c.mapperState {
+		allDone = allDone && (state == Done)
 		if state == Idle {
 			*filename = file
 			c.mapperState[file] = Processing
@@ -194,6 +209,12 @@ func (c *Coordinator) GetMapFile(mapperRep *WorkerRepStruct, filename *string) e
 			c.mapperIdMu.Unlock()
 			break
 		}
+	}
+	c.mapperStateMu.Unlock()
+	if *filename == "" && !allDone {
+		c.mapCond.L.Lock()
+		c.mapCond.Wait()
+		c.mapCond.L.Unlock()
 	}
 	return nil
 }
@@ -212,13 +233,13 @@ func (c *Coordinator) MapDone(args bool, done *bool) error {
 		c.mapDoneMu.Lock()
 		c.mapdone = true
 		c.mapDoneMu.Unlock()
+		c.mapCond.Broadcast()
 	}
 	return nil
 }
 
 func (c *Coordinator) UpdateFileMapState(filestate *FileMapStatePair, reply *bool) error {
-	filename := filestate.FileName
-	curstate := filestate.State
+	filename, curstate := filestate.FileName, filestate.State
 	c.mapperStateMu.Lock()
 	defer c.mapperStateMu.Unlock()
 	prevstate, ok := c.mapperState[filename]
@@ -228,6 +249,9 @@ func (c *Coordinator) UpdateFileMapState(filestate *FileMapStatePair, reply *boo
 	}
 	if prevstate != curstate {
 		c.mapperState[filename] = curstate
+		if curstate == Idle {
+			c.mapCond.Signal()
+		}
 	}
 	return nil
 }
@@ -275,7 +299,11 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		reducerState: make(map[int]int),
 		reducerTimer: make(map[int]int),
 		reducerId:    make(map[int]WorkerRepStruct),
+		mapCondMu:    sync.Mutex{},
+		reduceCondMu: sync.Mutex{},
 	}
+	c.mapCond = sync.NewCond(&c.mapCondMu)
+	c.reduceCond = sync.NewCond(&c.reduceCondMu)
 	for _, fileName := range c.files {
 		c.mapperState[fileName] = Idle
 		c.mapperTimer[fileName] = 0
