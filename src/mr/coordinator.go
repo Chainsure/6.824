@@ -45,14 +45,14 @@ type Coordinator struct {
 // ordinary function
 func (c *Coordinator) checkMapTimer() {
 	for {
-		time.Sleep(time.Millisecond * 10)
 		allDone := true
+		time.Sleep(time.Millisecond * 100)
 		c.mapperStateMu.Lock()
 		for file, state := range c.mapperState {
+			allDone = allDone && (state == Done)
 			if state == Processing {
-				allDone = false
 				c.mapperTimerMu.Lock()
-				c.mapperTimer[file] -= 10
+				c.mapperTimer[file] -= 100
 				if c.mapperTimer[file] <= 0 {
 					c.mapperState[file] = Idle
 					c.mapperIdMu.Lock()
@@ -61,8 +61,6 @@ func (c *Coordinator) checkMapTimer() {
 					c.mapCond.Signal()
 				}
 				c.mapperTimerMu.Unlock()
-			} else if state == Idle {
-				allDone = false
 			}
 		}
 		c.mapperStateMu.Unlock()
@@ -72,13 +70,13 @@ func (c *Coordinator) checkMapTimer() {
 	}
 	for {
 		allDone := true
+		time.Sleep(time.Millisecond * 100)
 		c.reduceStateMu.Lock()
 		for id, state := range c.reducerState {
-			time.Sleep(time.Millisecond * 10)
+			allDone = allDone && (state == Done)
 			if state == Processing {
-				allDone = false
 				c.reduceTimerMu.Lock()
-				c.reducerTimer[id] -= 10
+				c.reducerTimer[id] -= 100
 				if c.reducerTimer[id] <= 0 {
 					c.reducerState[id] = Idle
 					c.reduceIdMu.Lock()
@@ -87,8 +85,6 @@ func (c *Coordinator) checkMapTimer() {
 					c.reduceCond.Signal()
 				}
 				c.reduceTimerMu.Unlock()
-			} else if state == Idle {
-				allDone = false
 			}
 		}
 		c.reduceStateMu.Unlock()
@@ -121,7 +117,7 @@ func (c *Coordinator) UpdateFileReduceState(filestate *FileReduceStatePair, repl
 		err := fmt.Errorf("%v does not exist in reduceStateMap", reduceIdx)
 		return err
 	}
-	if prevState != state {
+	if prevState != Done && prevState != state {
 		c.reducerState[reduceIdx] = state
 		if state == Idle {
 			c.reduceCond.Signal()
@@ -247,7 +243,7 @@ func (c *Coordinator) UpdateFileMapState(filestate *FileMapStatePair, reply *boo
 		err := fmt.Errorf("%v does not exist", filename)
 		return err
 	}
-	if prevstate != curstate {
+	if prevstate != Done && prevstate != curstate {
 		c.mapperState[filename] = curstate
 		if curstate == Idle {
 			c.mapCond.Signal()
