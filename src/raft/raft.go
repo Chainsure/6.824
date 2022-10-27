@@ -20,6 +20,7 @@ package raft
 import (
 	//	"bytes"
 
+	"io"
 	"log"
 	"math/rand"
 	"sync"
@@ -263,7 +264,13 @@ type AppendEntryReply struct {
 func (rf *Raft) doAppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	log.Printf("server %v do append %v entries\n", rf.me, len(args.Entries))
 	reply.Term, reply.Success = args.Term, true
-	rf.logs = append(rf.logs, args.Entries...)
+	for _, entry := range args.Entries {
+		if entry.CommandIndex >= len(rf.logs) {
+			rf.logs = append(rf.logs, entry)
+		} else if entry.CommandTerm != rf.logs[entry.CommandIndex].CommandTerm {
+			rf.logs[entry.CommandIndex] = entry
+		}
+	}
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
 	}
@@ -274,11 +281,6 @@ func (rf *Raft) doAppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 			rf.logs[rf.lastApplied].CommandValid = true
 			rf.applyCh <- rf.logs[rf.lastApplied]
 		}
-		// if rf.commitIndex > rf.lastApplied {
-		// 	rf.lastApplied++
-		// 	rf.logs[rf.lastApplied].CommandValid = true
-		// 	rf.applyCh <- rf.logs[rf.lastApplied]
-		// }
 	}
 	rf.convertTo(Follower)
 	rf.resetElectionTimer()
@@ -680,7 +682,7 @@ func (rf *Raft) ticker() {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	// log.SetOutput(io.Discard)
+	log.SetOutput(io.Discard)
 	rf := &Raft{}
 	rf.mu = sync.Mutex{}
 	rf.peers = peers
