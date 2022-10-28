@@ -259,6 +259,9 @@ type AppendEntryArgs struct {
 type AppendEntryReply struct {
 	Term    int
 	Success bool
+	XTerm   int
+	XIndex  int
+	XLen    int
 }
 
 func (rf *Raft) doAppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
@@ -290,8 +293,19 @@ func (rf *Raft) fixLogs(args *AppendEntryArgs, reply *AppendEntryReply) {
 	log.Printf("server %v do fix logs with PrevLogIndex %v\n", rf.me, args.PrevLogIndex)
 	reply.Term, reply.Success = args.Term, false
 	if len(rf.logs) > args.PrevLogIndex {
-		rf.logs = rf.logs[0:args.PrevLogIndex]
+		reply.XTerm = rf.logs[args.PrevLogIndex].CommandTerm
+		xindex := args.PrevLogIndex
+		for xindex > 0 && rf.logs[xindex-1].CommandTerm == reply.XTerm {
+			xindex--
+		}
+		reply.XIndex = xindex
+		rf.logs = rf.logs[:xindex]
+	} else {
+		reply.XTerm = -1
+		reply.XLen = args.PrevLogIndex - len(rf.logs) + 1
 	}
+	log.Printf("server %v reply with xterm: %v xindex: %v xlen: %v\n",
+		rf.me, reply.XTerm, reply.XIndex, reply.XLen)
 	rf.convertTo(Follower)
 	rf.resetElectionTimer()
 }
@@ -376,7 +390,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	defer rf.mu.Unlock()
 	index, term, isLeader = len(rf.logs), rf.currentTerm, rf.state == Leader
 	if isLeader {
-		// log.Printf("Start server %v with index %v term %v state %v\n", rf.me, index, term, rf.state)
 		entry := ApplyMsg{
 			CommandValid: false,
 			Command:      command,
@@ -385,7 +398,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		}
 		rf.logs = append(rf.logs, entry)
 		log.Printf("server %v broacast heartbeat for new command\n", rf.me)
-		go rf.broadcastHeartbeat()
+		go rf.broadcastHeartbeat(false)
 	}
 	return index, term, isLeader
 }
@@ -423,7 +436,6 @@ func (rf *Raft) electionTimeTicker() {
 			rf.mu.Lock()
 			currentTime := time.Now().UnixMilli()
 			if currentTime-rf.electionTimestamp >= int64(rf.electionTimeout) {
-				// log.Printf("server %v election timeout with electionTimeout %v and timestamp %v\n", rf.me, rf.electionTimeout, currentTime)
 				rf.mu.Unlock()
 				rf.electionTimeoutChan <- true
 			} else {
@@ -437,7 +449,6 @@ func (rf *Raft) electionTimeTicker() {
 func (rf *Raft) resetElectionTimer() {
 	rf.electionTimestamp = time.Now().UnixMilli()
 	rf.electionTimeout = getRandomElectionTimeout()
-	// log.Printf("server %v reset election timer with timestamp %v and timeout %v\n", rf.me, rf.electionTimestamp, rf.electionTimeout)
 }
 
 func (rf *Raft) heartBeatTimeTicker() {
@@ -450,7 +461,6 @@ func (rf *Raft) heartBeatTimeTicker() {
 		} else {
 			rf.mu.Lock()
 			currentTime := time.Now().UnixMilli()
-			// log.Printf("server %v heartBeatTimestamp is %v and currentTime is %v\n", rf.me, rf.heartBeatTimestamp, currentTime)
 			if currentTime-rf.heartBeatTimestamp >= int64(HeartBeatTimeout) {
 				rf.mu.Unlock()
 				rf.heartBeatTimeoutChan <- true
@@ -464,7 +474,6 @@ func (rf *Raft) heartBeatTimeTicker() {
 
 func (rf *Raft) resetHeartBeatTimer() {
 	rf.heartBeatTimestamp = time.Now().UnixMilli()
-	// log.Printf("server %v reset heartbeat timer with timestamp %v and timeout %v\n", rf.me, rf.heartBeatTimestamp, HeartBeatTimeout)
 }
 
 func (rf *Raft) convertTo(state int) {
@@ -526,9 +535,9 @@ func (rf *Raft) startElection() {
 									rf.nextIndex[idx] = len(rf.logs)
 								}
 							}
-							rf.mu.Unlock()
 							log.Printf("server %v broacast heartbeat for election triumph\n", rf.me)
-							go rf.broadcastHeartbeat()
+							go rf.broadcastHeartbeat(true)
+							rf.mu.Unlock()
 						}
 					} else {
 						func(term int) {
@@ -596,14 +605,19 @@ func (rf *Raft) dealFailedBroadcast(peerId int,
 		rf.mu.Unlock()
 		return
 	} else {
-		appendArgs.Entries = append([]ApplyMsg{rf.logs[appendArgs.PrevLogIndex]}, appendArgs.Entries...)
-		appendArgs.PrevLogIndex--
-		// if appendArgs.PrevLogIndex < 0 {
-		// 	log.Println("illegal PrevLogIndex!")
-		// }
-		log.Printf("server %v reduce PrevLogIndex of peer %v to %v with term %v\n", rf.me, peerId, appendArgs.PrevLogIndex, rf.currentTerm)
-		appendArgs.PrevLogTerm = rf.logs[appendArgs.PrevLogIndex].CommandTerm
-		rf.nextIndex[peerId]--
+		if appendReply.XTerm != -1 {
+			for i := appendArgs.PrevLogIndex; i >= appendReply.XIndex; i-- {
+				appendArgs.Entries = append([]ApplyMsg{rf.logs[i]}, appendArgs.Entries...)
+			}
+			appendArgs.PrevLogIndex = appendReply.XIndex - 1
+		} else {
+			for i := appendArgs.PrevLogIndex; i >= appendArgs.PrevLogIndex-appendReply.XLen+1; i-- {
+				appendArgs.Entries = append([]ApplyMsg{rf.logs[i]}, appendArgs.Entries...)
+			}
+			appendArgs.PrevLogIndex -= appendReply.XLen
+		}
+		appendArgs.PrevLogTerm = rf.logs[appendArgs.PrevLogIndex].CommandIndex
+		rf.nextIndex[peerId] = appendArgs.PrevLogIndex + 1
 		rf.mu.Unlock()
 		rf.trySendAppendEntries(peerId, appendArgs, appendReply, appendCnt)
 	}
@@ -627,16 +641,22 @@ func (rf *Raft) trySendAppendEntries(peerId int,
 	}
 }
 
-func (rf *Raft) broadcastHeartbeat() {
+func (rf *Raft) broadcastHeartbeat(isHeartBeat bool) {
 	rf.mu.Lock()
 	rf.resetHeartBeatTimer()
 	appendArgs := AppendEntryArgs{
 		Term:         rf.currentTerm,
-		PrevLogIndex: len(rf.logs) - 1,
-		PrevLogTerm:  rf.logs[len(rf.logs)-1].CommandTerm,
 		LeaderCommit: rf.commitIndex,
 	}
-	log.Printf("server %v broadcast heartbeat | currentTerm: %v lastlog index: %v\n", rf.me, rf.currentTerm, len(rf.logs)-1)
+	if isHeartBeat {
+		appendArgs.PrevLogIndex = len(rf.logs) - 1
+		appendArgs.PrevLogTerm = rf.logs[len(rf.logs)-1].CommandTerm
+	} else {
+		appendArgs.PrevLogIndex = len(rf.logs) - 2
+		appendArgs.PrevLogTerm = rf.logs[len(rf.logs)-2].CommandTerm
+		appendArgs.Entries = append(appendArgs.Entries, rf.logs[len(rf.logs)-1])
+	}
+	log.Printf("server %v broadcast heartbeat | currentTerm: %v prevLogIndex: %v\n", rf.me, rf.currentTerm, appendArgs.PrevLogIndex)
 	rf.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -664,7 +684,7 @@ func (rf *Raft) ticker() {
 			go rf.startElection()
 		case <-rf.heartBeatTimeoutChan:
 			log.Printf("server %v broacast heartbeat for heartbeat timeout\n", rf.me)
-			go rf.broadcastHeartbeat()
+			go rf.broadcastHeartbeat(true)
 		}
 	}
 }
