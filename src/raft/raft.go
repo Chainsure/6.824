@@ -634,26 +634,25 @@ func (rf *Raft) dealSucessBroadcast(peerId int,
 		return
 	}
 	if len(appendArgs.Entries) == 0 {
-		rf.matchIndex[peerId] = len(rf.logs) - 1
+		// rf.matchIndex[peerId] = len(rf.logs) - 1
+		rf.matchIndex[peerId] = max(appendArgs.PrevLogIndexForUpdate, rf.matchIndex[peerId])
 		rf.nextIndex[peerId] = rf.matchIndex[peerId] + 1
 	} else {
 		rf.matchIndex[peerId] = max(rf.matchIndex[peerId], appendArgs.Entries[len(appendArgs.Entries)-1].CommandIndex)
 		rf.nextIndex[peerId] = rf.matchIndex[peerId] + 1
 	}
-	for i := len(appendArgs.Entries) - 1; i >= 0; i-- {
-		entry := &appendArgs.Entries[i]
-		if entry.CommandTerm < rf.currentTerm {
-			continue
-		}
-		_, ok := (*appendCnt)[entry.CommandIndex]
-		if ok {
-			(*appendCnt)[entry.CommandIndex]++
-		} else {
-			(*appendCnt)[entry.CommandIndex] = 2
-		}
-		if (*appendCnt)[entry.CommandIndex] >= len(rf.peers)/2+1 && !rf.logs[entry.CommandIndex].CommandValid {
-			rf.commitEntry(entry)
-			break
+	if rf.matchIndex[peerId] > rf.commitIndex && rf.matchIndex[peerId] < len(rf.logs) {
+		entry := &rf.logs[rf.matchIndex[peerId]]
+		if entry.CommandTerm == rf.currentTerm {
+			_, ok := (*appendCnt)[entry.CommandIndex]
+			if ok {
+				(*appendCnt)[entry.CommandIndex]++
+			} else {
+				(*appendCnt)[entry.CommandIndex] = 2
+			}
+			if (*appendCnt)[entry.CommandIndex] >= len(rf.peers)/2+1 && !rf.logs[entry.CommandIndex].CommandValid {
+				rf.commitEntry(entry)
+			}
 		}
 	}
 }
