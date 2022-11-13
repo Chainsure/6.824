@@ -604,9 +604,6 @@ func (rf *Raft) startElection() {
 				defer wg.Done()
 				reqVoteReply := RequestVoteReply{}
 				ok := rf.sendRequestVote(peerId, &reqVoteArg, &reqVoteReply)
-				// if !ok {
-				// 	log.Printf("server %v send vote request to server %v failed\n", rf.me, peerId)
-				// } else {
 				if ok {
 					term, granted := reqVoteReply.Term, reqVoteReply.VoteGranted
 					if granted {
@@ -729,17 +726,6 @@ func (rf *Raft) fixAppendArgsLogs(appendArgs *AppendEntryArgs, st int, ed int) {
 				appendArgs.Entries = append([]ApplyMsg{msg}, appendArgs.Entries...)
 			}
 		}
-		// if i-rf.indexOffset <= 0 || rf.logs[i-rf.indexOffset].SnapshotValid {
-		// 	msg := rf.logs[1]
-		// 	msg.CommandValid = false
-		// 	appendArgs.Entries = append([]ApplyMsg{msg}, appendArgs.Entries...)
-		// 	appendArgs.PrevLogIndex = 0
-		// 	break
-		// } else {
-		// 	msg := rf.logs[i-rf.indexOffset]
-		// 	msg.CommandValid = false
-		// 	appendArgs.Entries = append([]ApplyMsg{msg}, appendArgs.Entries...)
-		// }
 	}
 }
 
@@ -788,7 +774,6 @@ func (rf *Raft) trySendAppendEntries(peerId int,
 	*appendReply = AppendEntryReply{}
 	ok := rf.sendAppendEntries(peerId, appendArgs, appendReply)
 	if !ok {
-		// log.Printf("server %v touch server %v failed\n", rf.me, peerId)
 		return
 	} else {
 		if appendReply.Success {
